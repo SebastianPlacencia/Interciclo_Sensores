@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String, Int32
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
+from djitellopy import Tello
+import cv2
+
+class DroneConnector(Node):
+    def __init__(self):
+        super().__init__('drone_connector')
+        
+        # Inicializar el dron
+        self.tello = Tello()
+        self.connect_to_drone()
+        
+        # Publicadores (lo que este nodo envía al resto del sistema ROS2)
+        self.status_pub = self.create_publisher(String, '/drone_status', 10)
+        self.battery_pub = self.create_publisher(Int32, '/battery_status', 10)
+        self.telemetry_pub = self.create_publisher(String, '/telemetry', 10)
+        self.image_pub = self.create_publisher(Image, '/tello_image', 10)
+        
+        # Suscriptores (lo que recibe de otros nodos, como el mission_planner)
+        self.cmd_sub = self.create_subscription(String, '/tello_cmd', self.cmd_callback, 10)
+        
+        # Herramienta para convertir imágenes de OpenCV a mensajes ROS2
+        self.br = CvBridge()
+        
+        # Timers para publicar datos continuamente
+        self.create_timer(1.0, self.publish_telemetry) # Publicar telemetría cada segundo
+        self.create_timer(0.03, self.publish_video)    # Publicar video a ~30 FPS
+        
+        self.get_logger().info('Nodo drone_connector inicializado y listo.')
+
+    def connect_to_drone(self):
+        try:
+            self.tello.connect()
+            self.tello.streamon() # Encender la cámara
+            self.get_logger().info(f'Conectado al Dron. Batería inicial: {self.tello.get_battery()}%')
+        except Exception as e:
+            self.get_logger().error(f'Error al conectar con el dron: {e}')
+
+    def cmd_callback(self, msg):
+        partes = msg.data.split()
+        accion = partes[0]
+
+        self.get_logger().info(f'Comando recibido: {msg.data}')
+        try:
+            if accion == 'takeoff':
+                self.tello.takeoff()
+            elif accion == 'land':
+                self.tello.land()
+            elif accion == 'up':
+                self.tello.move_up(int(partes[1]))
+            elif accion == 'down':
+                self.tello.move_down(int(partes[1]))
+            elif accion == 'forward':
+                self.tello.move_forward(int(partes[1]))
+            elif accion == 'back':
+                self.tello.move_back(int(partes[1]))
+            elif accion == 'cw': # Girar derecha (Clockwise)
+                self.tello.rotate_clockwise(int(partes[1]))
+            elif accion == 'ccw': # Girar izquierda (Counter-Clockwise)
+                self.tello.rotate_counter_clockwise(int(partes[1]))
+        except Exception as e:
+            self.get_logger().error(f'Error ejecutando comando: {e}')
+
+    def publish_telemetry(self):
+        # Publicar batería
+        bat_msg = Int32()
+        bat_msg.data = self.tello.get_battery()
+        self.battery_pub.publish(bat_msg)
+        
+        # Publicar estado de conexión
+        status_msg = String()
+        status_msg.data = "Conectado y transmitiendo"
+        self.status_pub.publish(status_msg)
+
+        # Publicar telemetría general (Altura, Velocidad)
+        telemetry_msg = String()
+        h = self.tello.get_height()
+        v = self.tello.get_speed_x() # asumiendo velocidad en X
+        telemetry_msg.data = f"Altura: {h}cm, VelX: {v}cm/s"
+        self.telemetry_pub.publish(telemetry_msg)
+
+    def publish_video(self):
+        # Obtener un frame del dron
+        frame = self.tello.get_frame_read().frame
+        if frame is not None:
+            # Redimensionar un poco para mejorar rendimiento si es necesario
+            frame = cv2.resize(frame, (640, 480))
+            # Convertir de OpenCV a ROS2 Image message
+            img_msg = self.br.cv2_to_imgmsg(frame, encoding="bgr8")
+            self.image_pub.publish(img_msg)
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = DroneConnector()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.tello.streamoff()
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

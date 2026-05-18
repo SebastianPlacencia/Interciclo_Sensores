@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  ros_tello:
+    build: .
+    image: ros_tello_image:latest
+    container_name: ros_tello
+    network_mode: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - XDG_RUNTIME_DIR=/tmp
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./src:/ros2_ws/src
+    devices:
+      - /dev/dri:/dev/dri
+    stdin_open: true
+    tty: true

@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+import os
+import threading
+import time
+from datetime import datetime
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+os.environ["LIBGL_ALWAYS_SOFTWARE"] = "1"
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String, Int32
+
+class RosGuiNode(Node):
+    def __init__(self, gui):
+        super().__init__('gui_controller')
+        self.gui = gui
+        self.cmd_pub = self.create_publisher(String, '/tello_cmd', 10)
+        self.batt_sub = self.create_subscription(Int32, '/battery_status', self.batt_callback, 10)
+        self.tele_sub = self.create_subscription(String, '/telemetry', self.tele_callback, 10)
+        
+        # NUEVOS SUSCRIPTORES TIPO INT32
+        self.red_sub = self.create_subscription(Int32, '/red_object_count', self.red_callback, 10)
+        self.black_sub = self.create_subscription(Int32, '/black_object_count', self.black_callback, 10)
+        
+        self.current_telemetry = "Desconocida"
+        self.connection_ok = False
+        
+        self.flight_max_red = 0
+        self.flight_max_black = 0
+        self.latest_report = "Rojos: 0 | Negros: 0"
+
+    def reset_detections(self):
+        self.flight_max_red = 0
+        self.flight_max_black = 0
+        self._update_gui_report()
+
+    def batt_callback(self, msg):
+        self.gui.update_battery(msg.data)
+
+    def tele_callback(self, msg):
+        self.connection_ok = True
+        self.current_telemetry = msg.data
+        self.gui.update_telemetry_text(msg.data)
+        self.gui.verify_connection()
+
+    def red_callback(self, msg):
+        if msg.data > self.flight_max_red:
+            self.flight_max_red = msg.data
+            self._update_gui_report()
+
+    def black_callback(self, msg):
+        if msg.data > self.flight_max_black:
+            self.flight_max_black = msg.data
+            self._update_gui_report()
+
+    def _update_gui_report(self):
+        self.latest_report = f"Rojos: {self.flight_max_red} | Negros: {self.flight_max_black}"
+        self.gui.update_detection_text(self.latest_report)
+
+    def send_command(self, cmd):
+        msg = String()
+        msg.data = cmd
+        self.cmd_pub.publish(msg)
+        self.gui.log_message(f"COMANDO -> {cmd}")
+
+class TelloGCS:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Tello Pro GCS - Automatico")
+        self.root.geometry("600x820")
+        self.root.configure(bg="#2E3440")
+
+        self.emergency_flag = False
+        self.battery_level = 0
+        self.ros_node = None
+
+        self.traduccion_comandos = {
+            "adelante": "forward", "atras": "back",
+            "arriba": "up", "abajo": "down",
+            "derecha": "cw", "izquierda": "ccw"
+        }
+
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure("TFrame", background="#2E3440")
+        style.configure("TLabel", background="#2E3440", foreground="#ECEFF4")
+        
+        # ENCABEZADO
+        header_frame = tk.Frame(self.root, bg="#3B4252", pady=10)
+        header_frame.pack(fill="x")
+        tk.Label(header_frame, text="ESTADO DEL SISTEMA:", font=("Arial", 12, "bold"), bg="#3B4252", fg="white").pack(side="left", padx=10)
+        self.health_canvas = tk.Canvas(header_frame, width=30, height=30, bg="#3B4252", highlightthickness=0)
+        self.health_canvas.pack(side="left", padx=5)
+        self.health_indicator = self.health_canvas.create_oval(5, 5, 25, 25, fill="gray")
+        self.health_text = tk.Label(header_frame, text="Esperando datos...", font=("Arial", 10, "italic"), bg="#3B4252", fg="#D8DEE9")
+        self.health_text.pack(side="left")
+
+        # CHECKLIST
+        check_frame = tk.LabelFrame(self.root, text="Verificacion Automatica", padx=10, pady=5, bg="#2E3440", fg="#A3BE8C", font=("Arial", 10, "bold"))
+        check_frame.pack(fill="x", padx=10, pady=5)
+        self.lbl_check_conn = tk.Label(check_frame, text="X Enlace de Telemetria", bg="#2E3440", fg="#BF616A", font=("Arial", 10))
+        self.lbl_check_conn.grid(row=0, column=0, sticky="w", padx=20)
+        self.lbl_check_batt = tk.Label(check_frame, text="X Bateria Segura (> 25%)", bg="#2E3440", fg="#BF616A", font=("Arial", 10))
+        self.lbl_check_batt.grid(row=0, column=1, sticky="w", padx=20)
+
+        # TELEMETRIA Y DETECCIONES
+        tele_frame = tk.LabelFrame(self.root, text="Telemetria en Tiempo Real", padx=10, pady=10, bg="#2E3440", fg="white")
+        tele_frame.pack(fill="x", padx=10, pady=5)
+        tk.Label(tele_frame, text="Bateria:").grid(row=0, column=0, sticky="w")
+        self.batt_bar = ttk.Progressbar(tele_frame, length=300, mode="determinate")
+        self.batt_bar.grid(row=0, column=1, columnspan=2, padx=10, pady=5)
+        self.batt_lbl = tk.Label(tele_frame, text="--%", font=("Arial", 11, "bold"), fg="white", bg="#2E3440")
+        self.batt_lbl.grid(row=0, column=3)
+        tk.Label(tele_frame, text="Sensores:").grid(row=1, column=0, sticky="w", pady=5)
+        self.tele_lbl = tk.Label(tele_frame, text="Esperando...", font=("Arial", 10, "bold"), fg="#88C0D0", bg="#2E3440")
+        self.tele_lbl.grid(row=1, column=1, columnspan=3, sticky="w", padx=10)
+        tk.Label(tele_frame, text="Mision Actual:").grid(row=2, column=0, sticky="w", pady=5)
+        self.det_lbl = tk.Label(tele_frame, text="Rojos: 0 | Negros: 0", font=("Arial", 11, "bold"), fg="#EBCB8B", bg="#2E3440")
+        self.det_lbl.grid(row=2, column=1, columnspan=3, sticky="w", padx=10)
+
+        # PLANIFICADOR
+        mission_frame = tk.LabelFrame(self.root, text="Planificador Automatico", padx=10, pady=10, bg="#2E3440", fg="white")
+        mission_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        ctrl_box = tk.Frame(mission_frame, bg="#2E3440")
+        ctrl_box.pack(fill="x", pady=5)
+        self.act_var = tk.StringVar(value="adelante")
+        self.act_menu = ttk.Combobox(ctrl_box, textvariable=self.act_var, values=list(self.traduccion_comandos.keys()), width=12, state="readonly")
+        self.act_menu.pack(side="left", padx=5)
+        self.val_var = tk.StringVar(value="30")
+        tk.Entry(ctrl_box, textvariable=self.val_var, width=8).pack(side="left", padx=5)
+        tk.Button(ctrl_box, text="Añadir a la Ruta", command=self.add_step, bg="#4C566A", fg="white").pack(side="left", padx=5)
+
+        self.listbox = tk.Listbox(mission_frame, height=5, font=("Courier", 11), bg="#E5E9F0", fg="black")
+        self.listbox.pack(fill="both", pady=5)
+
+        self.status_lbl = tk.Label(mission_frame, text="SISTEMA LISTO", font=("Arial", 16, "bold"), fg="#A3BE8C", bg="#2E3440")
+        self.status_lbl.pack(pady=5)
+
+        btn_box = tk.Frame(mission_frame, bg="#2E3440")
+        btn_box.pack(fill="x", pady=5)
+        tk.Button(btn_box, text="Limpiar", command=lambda: self.listbox.delete(0, tk.END), bg="#4C566A", fg="white").pack(side="left", expand=True, fill="x", padx=2)
+        self.exec_btn = tk.Button(btn_box, text="INICIAR VUELO AUTONOMO", bg="#A3BE8C", fg="black", font=("Arial", 10, "bold"), command=self.run_mission)
+        self.exec_btn.pack(side="left", expand=True, fill="x", padx=2)
+
+        self.emerg_btn = tk.Button(self.root, text="ABORTAR MISION Y ATERRIZAR", bg="#BF616A", fg="white", font=("Arial", 14, "bold"), command=self.trigger_emergency)
+        self.emerg_btn.pack(fill="x", padx=10, pady=5, ipady=10)
+
+        # CONSOLA
+        log_frame = tk.LabelFrame(self.root, text="Black Box (Log de Mision)", padx=5, pady=5, bg="#2E3440", fg="white")
+        log_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        self.log_area = scrolledtext.ScrolledText(log_frame, height=6, bg="black", fg="#00FF00", font=("Consolas", 9))
+        self.log_area.pack(fill="both", expand=True)
+
+    def update_battery(self, b): self.root.after(0, self._ui_batt_update, b)
+    def update_telemetry_text(self, text): self.root.after(0, lambda: self.tele_lbl.config(text=text))
+    def update_detection_text(self, text): self.root.after(0, lambda: self.det_lbl.config(text=text))
+    def verify_connection(self): self.root.after(0, lambda: self.lbl_check_conn.config(text="OK Enlace de Telemetria", fg="#A3BE8C"))
+
+    def _ui_batt_update(self, b):
+        self.battery_level = b
+        self.batt_bar['value'] = b
+        self.batt_lbl.config(text=f"{b}%")
+        
+        if b < 15:
+            self.health_canvas.itemconfig(self.health_indicator, fill="red")
+            self.health_text.config(text="CRITICO: Bateria muy baja", fg="#BF616A")
+        elif b <= 30:
+            self.health_canvas.itemconfig(self.health_indicator, fill="yellow")
+            self.health_text.config(text="ADVERTENCIA: Bateria baja", fg="#EBCB8B")
+        else:
+            self.health_canvas.itemconfig(self.health_indicator, fill="green")
+            self.health_text.config(text="OPTIMO: Sistemas OK", fg="#A3BE8C")
+
+        if b > 25: self.lbl_check_batt.config(text="OK Bateria Segura (> 25%)", fg="#A3BE8C")
+        else: self.lbl_check_batt.config(text="X Bateria Segura (> 25%)", fg="#BF616A")
+
+    def log_message(self, msg):
+        t = datetime.now().strftime("%H:%M:%S")
+        self.root.after(0, lambda: [self.log_area.insert(tk.END, f"[{t}] {msg}\n"), self.log_area.see(tk.END)])
+
+    def add_step(self):
+        a, v = self.act_var.get(), self.val_var.get()
+        if not v.isdigit():
+            messagebox.showerror("Error", "El valor debe ser un numero entero.")
+            return
+        self.listbox.insert(tk.END, f"{a} {v}")
+
+    def trigger_emergency(self):
+        self.emergency_flag = True
+        self.log_message("!!! EMERGENCIA ACTIVADA: FORZANDO ATERRIZAJE !!!")
+        if self.ros_node: self.ros_node.send_command("land")
+        self.status_lbl.config(text="EMERGENCIA - ATERRIZANDO", fg="#BF616A")
+
+    def interruptible_sleep(self, seconds):
+        for _ in range(int(seconds * 10)):
+            if self.emergency_flag: return False
+            time.sleep(0.1)
+        return True
+
+    def run_mission(self):
+        if not self.ros_node or not self.ros_node.connection_ok:
+            messagebox.showwarning("Bloqueo de Seguridad", "Aun no hay enlace de telemetria con el dron.")
+            return
+        if self.battery_level <= 25:
+            messagebox.showwarning("Bloqueo de Seguridad", "Bateria insuficiente (< 25%). Cambie la bateria.")
+            return
+            
+        self.emergency_flag = False
+        self.ros_node.reset_detections()
+        self.log_message("Memoria de objetos reiniciada a cero.")
+        
+        threading.Thread(target=self._mission_thread, daemon=True).start()
+
+    def _mission_thread(self):
+        steps = self.listbox.get(0, tk.END)
+        self.root.after(0, lambda: [self.exec_btn.config(state="disabled"), self.emerg_btn.config(state="normal")])
+        
+        for i in range(3, 0, -1):
+            if self.emergency_flag: return
+            self.root.after(0, lambda val=i: self.status_lbl.config(text=f"DESPEGUE EN {val}...", fg="#EBCB8B"))
+            self.log_message(f"Iniciando en {i}...")
+            time.sleep(1)
+            
+        self.root.after(0, lambda: self.status_lbl.config(text="EN VUELO AUTONOMO", fg="#88C0D0"))
+        self.log_message("--- EJECUTANDO DESPEGUE DE CAJON ---")
+        self.ros_node.send_command("takeoff")
+        if not self.interruptible_sleep(7.0): return
+        
+        for step in steps:
+            if self.emergency_flag: break
+            partes = step.split()
+            accion_en = self.traduccion_comandos[partes[0]]
+            self.ros_node.send_command(f"{accion_en} {partes[1]}")
+            if not self.interruptible_sleep(6.5): break
+            
+        if not self.emergency_flag:
+            self.log_message("--- MISION TERMINADA: ATERRIZAJE DE CAJON ---")
+            self.ros_node.send_command("land")
+            self.root.after(0, lambda: self.status_lbl.config(text="Mision Exitosa", fg="#A3BE8C"))
+            
+        self.save_report()
+        self.root.after(0, lambda: self.exec_btn.config(state="normal"))
+
+    def save_report(self):
+        if not os.path.exists("flight_reports"): os.makedirs("flight_reports")
+        filename = f"flight_reports/vuelo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(filename, "w") as f:
+            f.write("=== REPORTE DE VUELO ===\n")
+            f.write(f"Conteo Total del Vuelo: {self.ros_node.latest_report}\n")
+            f.write("-" * 30 + "\nLog:\n" + self.log_area.get("1.0", tk.END))
+        self.log_message(f"Reporte guardado.")
+        
+        if not self.emergency_flag:
+            self.root.after(0, lambda: messagebox.showinfo("Reporte", f"Aterrizaje seguro.\n\nResultados: {self.ros_node.latest_report}"))
+
+    def set_ros(self, node): self.ros_node = node
+
+def main():
+    rclpy.init()
+    root = tk.Tk()
+    gcs = TelloGCS(root)
+    node = RosGuiNode(gcs)
+    gcs.set_ros(node)
+    threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
+    root.mainloop()
+    rclpy.shutdown()
+
+if __name__ == '__main__': main()
