@@ -1,7 +1,7 @@
-# Historial de Misiones (Flight Reports)
+# Historial de Vuelos (Flight Reports)
 
-En este directorio se almacenan automáticamente los reportes de auditoría generados por la Estación de Control Terrestre (GCS) al finalizar cada misión de vuelo o tras la activación del protocolo de emergencia (Failsafe).
+En esta carpeta se guardan automáticamente los reportes que genera el sistema cada vez que el dron termina un recorrido o cuando tiene que hacer un aterrizaje de emergencia por batería baja.
 
-Cada archivo `.txt` contiene:
-- El conteo final de objetos detectados mediante segmentación HSV.
-- La línea de tiempo exacta (log) con los comandos cinemáticos ejecutados.
+Dentro de cada archivo `.txt` vas a encontrar:
+- La cantidad total de objetos (rojos y negros) que la cámara logró reconocer durante el vuelo.
+- El registro paso a paso, con la hora exacta, de todos los movimientos que hizo el dron desde que despegó hasta que aterrizó.
