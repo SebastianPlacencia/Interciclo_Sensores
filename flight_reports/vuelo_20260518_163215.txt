@@ -1,0 +1,17 @@
+=== REPORTE DE VUELO ===
+Conteo Total del Vuelo: Rojos: 0 | Negros: 5
+------------------------------
+Log:
+[16:31:35] Memoria de objetos reiniciada a cero.
+[16:31:35] Iniciando en 3...
+[16:31:36] Iniciando en 2...
+[16:31:37] Iniciando en 1...
+[16:31:38] --- EJECUTANDO DESPEGUE DE CAJON ---
+[16:31:38] COMANDO -> takeoff
+[16:31:45] COMANDO -> up 40
+[16:31:51] COMANDO -> right 30
+[16:31:58] COMANDO -> ccw 180
+[16:32:04] COMANDO -> left 30
+[16:32:10] COMANDO -> down 20
+[16:32:15] --- MISION TERMINADA: ATERRIZAJE DE CAJON ---
+[16:32:15] COMANDO -> land
