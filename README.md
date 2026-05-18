@@ -1,10 +1,10 @@
-#  Ecosistema de Nodos ROS2 - Control y Seguridad de UAV
+# Ecosistema de Nodos ROS2 - Control y Seguridad de UAV
 
 Este apartado describe la arquitectura modular distribuida de los nodos del sistema y proporciona la secuencia exacta de comandos de terminal requeridos para la preparación, despliegue y auditoría de la red de comunicaciones.
 
 ---
 
-##  Catálogo de Nodos del Sistema
+## Catálogo de Nodos del Sistema
 
 La lógica de control y análisis se divide de manera asíncrona en los siguientes scripts extraídos directamente del entorno operativo:
 
@@ -25,9 +25,9 @@ La lógica de control y análisis se divide de manera asíncrona en los siguient
 
 ---
 
-##  Guía de Comandos de Terminal (En Orden Ejecutable)
+## Guía de Comandos de Terminal (En Orden Ejecutable)
 
-Siga rigurosamente este orden secuencial para preparar el sistema operativo anfitrión, compilar el entorno virtualizado y auditar las comunicaciones de la red de ROS2.
+Siga rigurosamente este orden secuencial para preparar el sistema operativo anfitrión, iniciar el contenedor y ejecutar cada uno de los nodos de ROS2.
 
 ### Fase 1: Preparación del Entorno Anfitrión (Host)
 
@@ -35,3 +35,48 @@ Siga rigurosamente este orden secuencial para preparar el sistema operativo anfi
 Permite que las ventanas visuales de OpenCV y la interfaz de `Tkinter` generadas dentro del contenedor Docker se rendericen en la pantalla de su máquina física.
 ```bash
 xhost +local:docker
+```
+
+### Fase 2: Arranque y Ejecución de Nodos
+
+**2. Iniciar el contenedor de ROS2:**
+Inicia el contenedor en segundo plano con los servicios base.
+```bash
+sudo docker start ros_tello
+```
+
+**3. Lanzar el nodo de conexión principal (Drone Connector):**
+Abre una terminal interactiva en el contenedor, carga las variables de entorno de ROS2 y ejecuta el nodo que enlaza con el dron.
+```bash
+sudo docker exec -it ros_tello bash
+source /ros2_ws/install/setup.bash && ros2 run uav_project_pkg drone_connector
+```
+
+**4. Lanzar el nodo de visión (Object Detector):**
+Abre una nueva terminal para procesar el flujo de video y la detección por color de manera simultánea.
+```bash
+sudo docker exec -it ros_tello bash
+source /ros2_ws/install/setup.bash && ros2 run uav_project_pkg object_detector
+```
+
+**5. Lanzar la Estación de Control Terrestre (GUI Controller):**
+Abre una nueva terminal para levantar la interfaz gráfica y gestionar la misión.
+```bash
+sudo docker exec -it ros_tello bash
+source /ros2_ws/install/setup.bash && ros2 run uav_project_pkg gui_controller
+```
+
+### Fase 3: Auditoría y Monitoreo del Sistema
+
+**6. Evaluar la Latencia de Tópicos (Dentro de Docker):**
+Abre una terminal interactiva en el contenedor y ejecuta el comando de diagnóstico para verificar el retraso de la red en los mensajes de telemetría.
+```bash
+sudo docker exec -it ros_tello bash
+ros2 topic delay /telemetry
+```
+
+**7. Monitorear Consumo de Recursos (Fuera de Docker):**
+Desde una terminal en tu entorno Linux nativo (Ubuntu), verifica el consumo de CPU y memoria RAM asignados al ecosistema.
+```bash
+docker stats uav_drone_container
+```
