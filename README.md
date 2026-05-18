@@ -1,6 +1,6 @@
 # Ecosistema de Nodos ROS2 - Control y Seguridad de UAV
 
-Este apartado describe la arquitectura modular distribuida de los nodos del sistema y proporciona la secuencia exacta de comandos de terminal requeridos para la preparación, despliegue y auditoría de la red de comunicaciones.
+Este apartado describe la arquitectura modular distribuida de los nodos del sistema y proporciona la secuencia de comandos de terminal requeridos para la preparación y despliegue.
 
 ---
 
